@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Galaxian Arcade Clone</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.2);
+            border: 4px solid #333;
+        }
+        canvas {
+            display: block;
+            max-width: 100vw;
+            max-height: 100vh;
+            image-rendering: pixelated;
+        }
+        .ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+        .hud {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 20px;
+            box-sizing: border-box;
+            font-size: 18px;
+            text-shadow: 2px 2px #000;
+        }
+        .message {
+            background: rgba(0, 0, 0, 0.9);
+            padding: 25px;
+            border: 2px solid #555;
+            border-radius: 10px;
+            pointer-events: auto;
+            max-width: 450px;
+        }
+        .rules-box {
+            text-align: left;
+            margin: 15px 0;
+            font-size: 13px;
+            color: #ccc;
+            line-height: 1.4;
+            border-top: 1px solid #444;
+            border-bottom: 1px solid #444;
+            padding: 10px 0;
+        }
+        .rules-box ul {
+            padding-left: 20px;
+            margin: 5px 0;
+        }
+        .hidden { display: none !important; }
+        .blink { animation: blinker 0.8s linear infinite; }
+        @keyframes blinker { 50% { opacity: 0; } }
+        .difficulty-btn {
+            background: #222;
+            color: white;
+            border: 1px solid #0ff;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 16px;
+            transition: all 0.2s;
+        }
+        .difficulty-btn:hover {
+            background: #0ff;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div class="hud">
+        <div id="score-display">SCORE: 00000</div>
+        <div id="level-display">STAGE: 1</div>
+        <div id="lives-display">LIVES: 3</div>
+    </div>
+    <div id="overlay" class="ui-layer">
+        <div id="start-screen" class="message">
+            <h1 style="color: #0ff; margin: 0;">GALAXIAN</h1>
+            
+            <div class="rules-box">
+                <strong>HOW TO PLAY:</strong>
+                <ul>
+                    <li>Use <strong>ARROWS</strong> or <strong>A/D</strong> to move your ship.</li>
+                    <li>Hold <strong>SPACE</strong> to fire a stream of bullets.</li>
+                    <li>Enemies in formation are worth base points.</li>
+                    <li><strong>DIVING</strong> enemies are worth 2.5x points!</li>
+                    <li>Earn an extra life at <strong>10,000</strong> points.</li>
+                </ul>
+            </div>
+
+            <p style="color: #ff0; font-size: 14px; margin-bottom: 10px;">SELECT DIFFICULTY</p>
+            <div>
+                <button class="difficulty-btn" onclick="window.game.setDifficulty('EASY')">EASY</button>
+                <button class="difficulty-btn" onclick="window.game.setDifficulty('MEDIUM')">MEDIUM</button>
+                <button class="difficulty-btn" onclick="window.game.setDifficulty('HARD')">HARD</button>
+            </div>
+        </div>
+        
+        <div id="pause-screen" class="message hidden">
+            <h1>PAUSED</h1>
+            <p>PRESS P TO RESUME</p>
+        </div>
+
+        <div id="game-over-screen" class="message hidden">
+            <h1 style="color: #f00;">GAME OVER</h1>
+            <p id="final-score">FINAL SCORE: 0</p>
+            <p class="blink" style="cursor: pointer;" onclick="location.reload()">CLICK TO RESTART</p>
+        </div>
+
+        <div id="level-complete-screen" class="message hidden">
+            <h1 style="color: #0f0;">STAGE COMPLETE</h1>
+            <p>PREPARE FOR NEXT WAVE...</p>
+        </div>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const GAME_WIDTH = 600;
+const GAME_HEIGHT = 800;
+canvas.width = GAME_WIDTH;
+canvas.height = GAME_HEIGHT;
+
+const CONFIG = {
+    PLAYER_SPEED: 6,
+    BULLET_SPEED: 15,
+    BULLET_LIMIT: 2,
+    FIRE_COOLDOWN: 10,
+    ENEMY_ROWS: 4,
+    ENEMY_COLS: 5,
+    GRID_SPACING_X: 65,
+    GRID_SPACING_Y: 55,
+    INVINCIBILITY_TIME: 120,
+    DIFFICULTIES: {
+        'EASY': { diveChance: 0.003, diveSpeed: 0.5, bulletSpeed: 2 },
+        'MEDIUM': { diveChance: 0.006, diveSpeed: 1.5, bulletSpeed: 4 },
+        'HARD': { diveChance: 0.01, diveSpeed: 2.5, bulletSpeed: 6 }
+    }
+};
+
+class Bullet {
+    constructor(x, y, dy, color, owner) {
+        this.x = x;
+        this.y = y;
+        this.dy = dy;
+        this.width = 3;
+        this.height = 14;
+        this.color = color;
+        this.owner = owner; 
+        this.active = true;
+    }
+    update() {
+        this.y += this.dy;
+        if (this.y < -30 || this.y > GAME_HEIGHT + 30) this.active = false;
+    }
+    draw(ctx) {
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x - this.width/2, this.y, this.width, this.height);
+    }
+}
+
+class Particle {
+    constructor(x, y, color) {
+        this.x = x;
+        this.y = y;
+        this.vx = (Math.random() - 0.5) * 8;
+        this.vy = (Math.random() - 0.5) * 8;
+        this.life = 1.0;
+        this.decay = Math.random() * 0.04 + 0.02;
+        this.color = color;
+    }
+    update() { this.x += this.vx; this.y += this.vy; this.life -= this.decay; }
+    draw(ctx) {
+        ctx.globalAlpha = this.life;
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x, this.y, 3, 3);
+        ctx.globalAlpha = 1;
+    }
+}
+
+class Player {
+    constructor() {
+        this.reset();
+    }
+    reset() {
+        this.x = GAME_WIDTH / 2;
+        this.y = GAME_HEIGHT - 70;
+        this.width = 40;
+        this.height = 30;
+        this.lives = 3;
+        this.bullets = [];
+        this.invincible = 0;
+        this.fireTimer = 0;
+    }
+    update(input) {
+        if (input.left && this.x > this.width/2) this.x -= CONFIG.PLAYER_SPEED;
+        if (input.right && this.x < GAME_WIDTH - this.width/2) this.x += CONFIG.PLAYER_SPEED;
+        if (this.fireTimer > 0) this.fireTimer--;
+        if (input.shoot && this.fireTimer <= 0 && this.bullets.length < CONFIG.BULLET_LIMIT) {
+            this.bullets.push(new Bullet(this.x, this.y - 15, -CONFIG.BULLET_SPEED, '#0ff', 'player'));
+            this.fireTimer = CONFIG.FIRE_COOLDOWN;
+        }
+        this.bullets.forEach((b, i) => {
+            b.update();
+            if (!b.active) this.bullets.splice(i, 1);
+        });
+        if (this.invincible > 0) this.invincible--;
+    }
+    draw(ctx) {
+        if (this.invincible % 10 > 5) return; 
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.moveTo(0, -18);
+        ctx.lineTo(-22, 12);
+        ctx.lineTo(22, 12);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#0ff';
+        ctx.fillRect(-5, -6, 10, 12);
+        ctx.restore();
+        this.bullets.forEach(b => b.draw(ctx));
+    }
+}
+
+class Enemy {
+    constructor(col, row, type, difficultySettings, stage) {
+        this.col = col; this.row = row; this.type = type; this.stage = stage;
+        this.settings = difficultySettings; this.width = 34; this.height = 30;
+        this.resetPosition();
+        this.state = 'formation'; this.diveTime = 0; this.diveType = 0;
+        this.startX = 0; this.active = true;
+        this.points = type === 0 ? 100 : (type === 1 ? 50 : 30);
+        this.color = type === 0 ? '#ff0' : (type === 1 ? '#f0f' : '#00f');
+    }
+    resetPosition() {
+        this.originX = (GAME_WIDTH / 2) - ((CONFIG.ENEMY_COLS-1) * CONFIG.GRID_SPACING_X / 2) + (this.col * CONFIG.GRID_SPACING_X);
+        this.originY = 140 + (this.row * CONFIG.GRID_SPACING_Y);
+        this.x = this.originX; this.y = this.originY;
+    }
+    startDive() {
+        if (this.state !== 'formation') return;
+        this.state = 'diving'; this.diveTime = 0; this.startX = this.x;
+        this.diveType = Math.floor(Math.random() * 3);
+    }
+    update(formationOffset, playerX) {
+        if (this.state === 'formation') {
+            this.x = this.originX + formationOffset;
+            this.y = this.originY;
+        } else if (this.state === 'diving') {
+            this.diveTime += 0.015;
+            let speed = this.settings.diveSpeed + (this.stage * 0.2);
+            switch(this.diveType) {
+                case 0: this.y += speed * 1.8; this.x = this.startX + Math.sin(this.diveTime * 4) * 120; break;
+                case 1: this.y += speed * 1.5; this.x = this.startX + Math.cos(this.diveTime * 5) * 80; break;
+                case 2: this.y += speed * 2; this.x += (playerX - this.x) * 0.02; break;
+            }
+            if (Math.random() < 0.01) return new Bullet(this.x, this.y, this.settings.bulletSpeed, '#f00', 'enemy');
+            if (this.y > GAME_HEIGHT) { this.y = -50; this.state = 'returning'; }
+        } else if (this.state === 'returning') {
+            this.x += ((this.originX + formationOffset) - this.x) * 0.04;
+            this.y += (this.originY - this.y) * 0.04;
+            if (Math.abs(this.y - this.originY) < 2) this.state = 'formation';
+        }
+        return null;
+    }
+    draw(ctx) {
+        ctx.save(); ctx.translate(this.x, this.y);
+        ctx.fillStyle = this.color;
+        ctx.beginPath(); ctx.moveTo(0, 15); ctx.lineTo(-15, -5); ctx.lineTo(-5, -15); ctx.lineTo(5, -15); ctx.lineTo(15, -5); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.fillRect(-6, -5, 4, 4); ctx.fillRect(2, -5, 4, 4);
+        ctx.restore();
+    }
+}
+
+class Game {
+    constructor() {
+        this.canvas = canvas; this.ctx = ctx;
+        this.input = { left: false, right: false, shoot: false };
+        this.state = 'START'; this.score = 0; this.stage = 1;
+        this.player = new Player(); this.enemies = []; this.enemyBullets = []; this.particles = [];
+        this.formationTime = 0; this.extraLifeGained = false;
+        this.initInput(); this.createStars();
+        window.game = this; this.loop();
+    }
+    initInput() {
+        window.addEventListener('keydown', e => {
+            if (e.code === 'ArrowLeft' || e.code === 'KeyA') this.input.left = true;
+            if (e.code === 'ArrowRight' || e.code === 'KeyD') this.input.right = true;
+            if (e.code === 'Space') this.input.shoot = true;
+            if (e.code === 'KeyP') this.togglePause();
+        });
+        window.addEventListener('keyup', e => {
+            if (e.code === 'ArrowLeft' || e.code === 'KeyA') this.input.left = false;
+            if (e.code === 'ArrowRight' || e.code === 'KeyD') this.input.right = false;
+            if (e.code === 'Space') this.input.shoot = false;
+        });
+    }
+    setDifficulty(choice) { this.difficultySettings = CONFIG.DIFFICULTIES[choice]; this.startNewGame(); }
+    createStars() {
+        this.stars = [];
+        for (let i = 0; i < 80; i++) this.stars.push({ x: Math.random() * GAME_WIDTH, y: Math.random() * GAME_HEIGHT, size: Math.random() * 2, speed: Math.random() * 1.5 + 0.5 });
+    }
+    startNewGame() { this.score = 0; this.stage = 1; this.extraLifeGained = false; this.player.reset(); this.initLevel(); this.state = 'PLAYING'; this.updateUI(); }
+    initLevel() {
+        this.enemies = []; this.enemyBullets = [];
+        for (let row = 0; row < CONFIG.ENEMY_ROWS; row++) {
+            let type = row === 0 ? 0 : (row === 1 ? 1 : 2);
+            for (let col = 0; col < CONFIG.ENEMY_COLS; col++) this.enemies.push(new Enemy(col, row, type, this.difficultySettings, this.stage));
+        }
+    }
+    togglePause() { 
+        if (this.state === 'PLAYING') this.state = 'PAUSED'; 
+        else if (this.state === 'PAUSED') this.state = 'PLAYING'; 
+        this.updateUI(); 
+    }
+    update() {
+        if (this.state !== 'PLAYING') return;
+        this.stars.forEach(s => { s.y += s.speed; if (s.y > GAME_HEIGHT) s.y = 0; });
+        this.formationTime += 0.005;
+        let formationOffset = Math.sin(this.formationTime) * 30;
+        this.player.update(this.input);
+        this.enemies.forEach(enemy => {
+            let bullet = enemy.update(formationOffset, this.player.x);
+            if (bullet) this.enemyBullets.push(bullet);
+            let chance = this.difficultySettings.diveChance + (this.stage * 0.0005);
+            if (enemy.state === 'formation' && Math.random() < chance) {
+                enemy.startDive();
+                if (enemy.type === 0) {
+                    this.enemies.filter(e => e.state === 'formation' && e.type !== 0).slice(0, 2).forEach(esc => esc.startDive());
+                }
+            }
+        });
+        this.enemyBullets.forEach((b, i) => { b.update(); if (!b.active) this.enemyBullets.splice(i, 1); });
+        this.particles.forEach((p, i) => { p.update(); if (p.life <= 0) this.particles.splice(i, 1); });
+        this.checkCollisions();
+        if (this.enemies.length === 0) {
+            this.state = 'LEVEL_COMPLETE'; this.updateUI();
+            setTimeout(() => { if (this.state !== 'GAMEOVER' && this.state !== 'START') { this.stage++; this.initLevel(); this.state = 'PLAYING'; this.updateUI(); } }, 2000);
+        }
+        if (!this.extraLifeGained && this.score >= 10000) { this.player.lives++; this.extraLifeGained = true; this.updateUI(); }
+    }
+    checkCollisions() {
+        this.player.bullets.forEach((pb, pIndex) => {
+            for (let i = 0; i < this.enemies.length; i++) {
+                const e = this.enemies[i];
+                if (pb.x > e.x - 17 && pb.x < e.x + 17 && pb.y > e.y - 15 && pb.y < e.y + 15) {
+                    this.createExplosion(e.x, e.y, e.color);
+                    this.score += Math.floor(e.points * (e.state !== 'formation' ? 2.5 : 1));
+                    this.enemies.splice(i, 1);
+                    this.player.bullets.splice(pIndex, 1);
+                    this.updateUI();
+                    break;
+                }
+            }
+        });
+        if (this.player.invincible <= 0) {
+            this.enemyBullets.forEach((eb, i) => {
+                if (eb.x > this.player.x - 20 && eb.x < this.player.x + 20 && eb.y > this.player.y - 15 && eb.y < this.player.y + 15) {
+                    this.handlePlayerHit(); this.enemyBullets.splice(i, 1);
+                }
+            });
+            this.enemies.forEach(e => { if (Math.hypot(e.x - this.player.x, e.y - this.player.y) < 28) this.handlePlayerHit(); });
+        }
+    }
+    handlePlayerHit() {
+        this.createExplosion(this.player.x, this.player.y, '#fff');
+        this.player.lives--; this.updateUI();
+        if (this.player.lives <= 0) this.state = 'GAMEOVER';
+        else { this.player.invincible = CONFIG.INVINCIBILITY_TIME; this.enemyBullets = []; }
+        this.updateUI();
+    }
+    createExplosion(x, y, color) { for (let i = 0; i < 20; i++) this.particles.push(new Particle(x, y, color)); }
+    updateUI() {
+        document.getElementById('score-display').innerText = `SCORE: ${this.score.toString().padStart(5, '0')}`;
+        document.getElementById('level-display').innerText = `STAGE: ${this.stage}`;
+        document.getElementById('lives-display').innerText = `LIVES: ${this.player.lives}`;
+        ['start-screen', 'pause-screen', 'game-over-screen', 'level-complete-screen'].forEach(id => document.getElementById(id).classList.add('hidden'));
+        if (this.state === 'START') document.getElementById('start-screen').classList.remove('hidden');
+        if (this.state === 'PAUSED') document.getElementById('pause-screen').classList.remove('hidden');
+        if (this.state === 'GAMEOVER') {
+            document.getElementById('game-over-screen').classList.remove('hidden');
+            document.getElementById('final-score').innerText = `FINAL SCORE: ${this.score}`;
+        }
+        if (this.state === 'LEVEL_COMPLETE') document.getElementById('level-complete-screen').classList.remove('hidden');
+    }
+    draw() {
+        ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+        ctx.fillStyle = '#fff'; this.stars.forEach(s => ctx.fillRect(s.x, s.y, s.size, s.size));
+        this.player.draw(ctx);
+        this.enemies.forEach(e => e.draw(ctx));
+        this.enemyBullets.forEach(b => b.draw(ctx));
+        this.particles.forEach(p => p.draw(ctx));
+    }
+    loop() { this.update(); this.draw(); requestAnimationFrame(() => this.loop()); }
+}
+
+window.onload = () => { new Game(); };
+</script>
+</body>
+</html>
